@@ -3,6 +3,13 @@ const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
 const path = require("path");
 
+const session = require("express-session");
+const bcrypt = require("bcryptjs");
+
+const User = require("./models/User");
+const Person = require("./models/Person");
+const { register } = require("module");
+
 const app = express();
 const port = process.env.port||3000;
 
@@ -10,6 +17,28 @@ app.use(express.static(path.join(__dirname, "public")));
 
 app.use(bodyParser.json());
 app.use(express.urlencoded({extended:true}));
+
+app.use(session({
+    secret:"12345",
+    resave:false,
+    saveUninitialized:true,
+    cookie:{secure:false}
+}))
+
+/* const user = {
+    admin:bcrypt.hashSync("12345", 10)
+}
+*/
+
+function isAuthenticated(req,res, next){
+    if (req.session.user){
+        return next();
+    }
+    else{
+        return res.redirect("/login");
+    }
+    
+}
 
 const mongoURI = "mongodb://localhost:27017/crudapp";
 
@@ -23,16 +52,49 @@ db.once("open", ()=>{
     console.log("Connected to MongoDB Database");
 });
 
-const peopleSchema = new mongoose.Schema({
-    firstName:String,
-    lastName:String,
-    email:String
-});
+app.get("/register", (req,res)=>{
+    res.sendFile(path.join(__dirname, "public", "register.html"));
+})
 
-const Person = mongoose.model("Person", peopleSchema, "peopledata");
+app.post("/register", async (req,res)=>{
+    try{
+        const {username, password, email} = req.body;
+
+        const existingUser = await User.findOne({username});
+        const existingEmail = await User.findOne({email});
+
+        if(existingUser)
+        {
+            return res.send("Username Already Taken, Try A Different One");
+        }
+
+        if (existingEmail)
+        {
+            return res.send("Email Already In Use")
+        }
+
+        const hashedPassword = bcrypt.hashSync(password, 10);
+        
+        const newUser = new User({username, password:hashedPassword, email});
+        
+        await newUser.save();
+        res.redirect("/login");
+
+    }catch(err){
+        res.status(500).send("Error Registering New User");
+    }
+})
 
 app.get("/", (req,res)=>{
     res.sendFile("index.html");
+});
+
+app.get("/users", isAuthenticated, (req,res)=>{
+    res.sendFile(path.join(__dirname, "public", "users.html"));
+});
+
+app.get("/login", (req,res)=>{
+    res.sendFile(path.join(__dirname + "/public/login.html"));
 });
 
 app.get("/people", async(req,res)=>{
@@ -62,7 +124,7 @@ app.post("/addperson", async (req,res)=>{
         const newPerson = new Person(req.body);
         const savePerson = await newPerson.save();
         //res.status(201).json(savePerson);
-        res.redirect("/");
+        res.redirect("/users");
     }catch(err){
         res.status(501).json({error:"Failed to add new person"});
     }
@@ -97,6 +159,26 @@ app.delete("/deleteperson/firstName", async (req,res)=>{
         console.log(err);
         res.status(404).json({error:"Person not found"});
     }
+});
+
+app.post("/login", async (req,res)=>{
+    const {username, password} = req.body;
+
+    const user = await User.findOne({username});
+
+    if (user && bcrypt.compareSync(password, user.password))
+    {
+        req.session.user = username;
+        return res.redirect("/users");
+    }
+    req.session.error = "Invalid User";
+    return res.redirect("/login");
+});
+
+app.get("/logout", (req,res)=>{
+    req.session.destroy(()=>{
+        res.redirect("/login");
+    });
 });
 
 app.listen(port, ()=>{
